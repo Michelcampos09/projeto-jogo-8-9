@@ -2,10 +2,20 @@ using UnityEngine;
 
 public class bullet : MonoBehaviour
 {
-    // Start is called once before the first execution of Update after the MonoBehaviour is created
+    private Rigidbody2D rb;
+    public float initialVelocity;
+    public bool lookingRight;
     void Start()
     {
-        
+        rb = GetComponent<Rigidbody2D>();
+        if(lookingRight)
+        {
+            rb.linearVelocity = Vector2.right * initialVelocity;
+        }
+        else
+        {
+            rb.linearVelocity = Vector2.left * initialVelocity;
+        }
     }
 
     // Update is called once per frame
