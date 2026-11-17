@@ -280,7 +280,7 @@ TrailRenderer:
   m_SortingOrder: 0
   m_MaskInteraction: 0
   m_Time: 5
-  m_PreviewTimeScale: 0.1
+  m_PreviewTimeScale: 1
   m_Parameters:
     serializedVersion: 3
     widthMultiplier: 0.37682873
@@ -2558,18 +2558,16 @@ MonoBehaviour:
   fallMultiplier: 2.5
   lowJumpMultiplier: 2
   enableDoubleJump: 1
-  coyoteTime: 0.15
+  coyoteTime: 0
   jumpBufferTime: 0.15
   dashSpeed: 20
   dashDuration: 0.5
   dashCooldown: 0
   groundCheckPoint: {fileID: 1712987760}
-  groundCheckSize: {x: 3, y: 3}
+  groundCheckSize: {x: 0.5, y: 0.5}
   groundLayer:
     serializedVersion: 2
     m_Bits: 64
-  rb: {fileID: 1746047630}
-  animator: {fileID: 0}
   coinText: {fileID: 0}
   walkingParameter: isMoving
   onGroundParameter: onGround

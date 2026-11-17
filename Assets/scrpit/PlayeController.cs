@@ -131,14 +131,14 @@ public class PlatformController : MonoBehaviour
 
         for (int i = 0; i < hitCount; i++)
         {
-            if (!groundHits[i].transform.IsChildOf(transform))
+            if (groundHits[i].attachedRigidbody != rb)
             {
                 touchingGround = true;
                 break;
             }
         }
 
-        isGrounded = touchingGround && groundLockTimer <= 0f;
+        isGrounded = touchingGround && groundLockTimer <= 0f && rb.linearVelocity.y <= 0.1f;
 
         if (isGrounded)
         {
