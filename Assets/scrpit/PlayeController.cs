@@ -7,77 +7,88 @@ using UnityEngine.SceneManagement;
 [RequireComponent(typeof(Rigidbody2D))]
 public class PlatformController : MonoBehaviour
 {
-    [Header("Movement Settings")]
+    private const float GroundLockAfterJump = 0.1f;
+
+    [Header("Movement")]
     [SerializeField] private float moveSpeed = 8f;
 
-    [Header("Jump & Physics Settings")]
+    [Header("Jump & Physics")]
     [SerializeField] private float jumpForce = 12f;
     [SerializeField] private float fallMultiplier = 2.5f;
     [SerializeField] private float lowJumpMultiplier = 2f;
-    [SerializeField] private bool enableDoubleJump = true; // Nova opção ativável no Inspector
+    [SerializeField] private bool enableDoubleJump = true;
+    [SerializeField] private float coyoteTime = 0.15f;
+    [SerializeField] private float jumpBufferTime = 0.15f;
 
-    [Header("Game Feel (Advanced)")]
-    [SerializeField] private float coyoteTime = 0.15f; // Tempo que pode pular apos cair
-    [SerializeField] private float jumpBufferTime = 0.15f; // Tempo que o pulo fica salvo
+    [Header("Dash")]
+    [SerializeField] private float dashSpeed = 25f;
+    [SerializeField] private float dashDuration = 0.15f;
+    [SerializeField] private float dashCooldown = 1f;
+
+    [Header("Ground Check")]
+    [SerializeField] private Transform groundCheckPoint;
+    [SerializeField] private Vector2 groundCheckSize = new Vector2(0.5f, 0.2f);
+    [SerializeField] private LayerMask groundLayer;
+
+    [Header("References")]
+    [SerializeField] private TextMeshProUGUI coinText;
+
+    [Header("Animation")]
+    [SerializeField] private string walkingParameter = "isMoving";
+    [SerializeField] private string onGroundParameter = "onGround";
+
+    private Rigidbody2D rb;
+    private Animator animator;
+    private PlayerActionMap inputActions;
+    private InputAction moveAction;
+    private InputAction jumpAction;
+
+    private readonly Collider2D[] groundHits = new Collider2D[8];
+    private ContactFilter2D groundFilter;
+
+    private Vector2 moveInput;
+    private bool isGrounded;
+    private bool canDoubleJump;
     private float coyoteTimeCounter;
     private float jumpBufferCounter;
-    private bool canDoubleJump;
-
-    [Header("Dash Settings")]
-    public float dashSpeed = 25f;
-    public float dashDuration = 0.15f;
-    public float dashCooldown = 1f;
+    private float groundLockTimer;
 
     private bool canDash = true;
     private bool isDashing;
     private float dashDirection = 1f;
 
-    [Header("Ground Check (Robust)")]
-    [SerializeField] private Transform groundCheckPoint;
-    [SerializeField] private Vector2 groundCheckSize = new Vector2(0.5f, 0.2f); // Transformamos em Caixa (Box)
-    [SerializeField] private LayerMask groundLayer;
-
-    [Header("References")]
-    [SerializeField] private Rigidbody2D rb;
-    [SerializeField] private Animator animator;
-    [SerializeField] private TextMeshProUGUI coinText;
-
-    [Header("Animation Settings")]
-    [SerializeField] private string walkingParameter = "isMoving";
-    [SerializeField] private string onGroundParameter = "onGround";
-
-    private int coinCounter = 0;
-    private PlayerActionMap inputActions;
-    private InputAction moveAction;
-    private InputAction jumpAction;
-
-    private Vector2 moveInput;
-    private bool isGrounded;
+    private int coinCounter;
 
     private void Awake()
     {
-        if (rb == null) rb = GetComponent<Rigidbody2D>();
-        if (animator == null) animator = GetComponentInChildren<Animator>();
+        rb = GetComponent<Rigidbody2D>();
+        animator = GetComponentInChildren<Animator>();
 
         inputActions = new PlayerActionMap();
         moveAction = inputActions.Player.Move;
         jumpAction = inputActions.Player.Jump;
+
+        groundFilter = new ContactFilter2D { useTriggers = false };
+        groundFilter.SetLayerMask(groundLayer);
     }
 
     private void OnEnable()
     {
         moveAction.Enable();
         jumpAction.Enable();
-
-        // Registamos apenas o acionamento do botão para o Buffer
-        jumpAction.performed += context => jumpBufferCounter = jumpBufferTime;
-        jumpAction.canceled += context => jumpBufferCounter = 0f;
+        jumpAction.started += OnJumpStarted;
     }
 
     private void OnDisable()
     {
+        jumpAction.started -= OnJumpStarted;
         moveAction.Disable();
         jumpAction.Disable();
+    }
+
+    private void OnJumpStarted(InputAction.CallbackContext context)
+    {
+        jumpBufferCounter = jumpBufferTime;
     }
 
     private void Update()
@@ -86,18 +97,13 @@ public class PlatformController : MonoBehaviour
 
         moveInput = moveAction.ReadValue<Vector2>();
 
-        CheckGrounded();
-        HandleJumpLogic();
         Flip();
         UpdateAnimations();
 
-        // Dash Input
-        if (Keyboard.current != null)
+        if (canDash && Keyboard.current != null &&
+            (Keyboard.current.leftShiftKey.wasPressedThisFrame || Keyboard.current.rightShiftKey.wasPressedThisFrame))
         {
-            if ((Keyboard.current.leftShiftKey.wasPressedThisFrame || Keyboard.current.rightShiftKey.wasPressedThisFrame) && canDash)
-            {
-                StartCoroutine(PerformDash());
-            }
+            StartCoroutine(PerformDash());
         }
     }
 
@@ -109,84 +115,93 @@ public class PlatformController : MonoBehaviour
             return;
         }
 
-        // Movimentação Horizontal
+        CheckGrounded();
+        HandleJump();
+        ApplyGravityModifiers();
+
         rb.linearVelocity = new Vector2(moveInput.x * moveSpeed, rb.linearVelocity.y);
     }
 
     private void CheckGrounded()
     {
-        // Usamos OverlapBox para uma deteção mais precisa que o OverlapCircle
-        Collider2D collider = Physics2D.OverlapBox(groundCheckPoint.position, groundCheckSize, 0f, groundLayer);
-        isGrounded = collider != null;
+        groundLockTimer -= Time.fixedDeltaTime;
+
+        int hitCount = Physics2D.OverlapBox(groundCheckPoint.position, groundCheckSize, 0f, groundFilter, groundHits);
+        bool touchingGround = false;
+
+        for (int i = 0; i < hitCount; i++)
+        {
+            if (!groundHits[i].transform.IsChildOf(transform))
+            {
+                touchingGround = true;
+                break;
+            }
+        }
+
+        isGrounded = touchingGround && groundLockTimer <= 0f;
 
         if (isGrounded)
         {
-            coyoteTimeCounter = coyoteTime; // Reseta o tempo de tolerância de queda
-            canDoubleJump = enableDoubleJump; // Recarrega o pulo duplo
+            coyoteTimeCounter = coyoteTime;
+            canDoubleJump = enableDoubleJump;
         }
         else
         {
-            coyoteTimeCounter -= Time.deltaTime; // Vai diminuindo se não estiver no chão
+            coyoteTimeCounter -= Time.fixedDeltaTime;
         }
     }
 
-    private void HandleJumpLogic()
+    private void HandleJump()
     {
-        // Diminui o tempo guardado na "memória" do botão de pulo
-        jumpBufferCounter -= Time.deltaTime;
+        jumpBufferCounter -= Time.fixedDeltaTime;
 
-        // Se o jogador tentou pular (buffer ativo)
-        if (jumpBufferCounter > 0f)
-        {
-            // Pulo Normal (usando Coyote Time, mesmo se acabou de escorregar da borda)
-            if (coyoteTimeCounter > 0f)
-            {
-                ExecuteJump();
-                jumpBufferCounter = 0f;
-            }
-            // Pulo Duplo
-            else if (canDoubleJump)
-            {
-                ExecuteJump();
-                canDoubleJump = false;
-                jumpBufferCounter = 0f;
-            }
-        }
+        if (jumpBufferCounter <= 0f) return;
 
-        // FÍSICA ESTILO MARIO: Cai mais rápido, e pula mais baixo se soltar o botão
-        if (rb.linearVelocity.y < 0) // Caindo
+        if (coyoteTimeCounter > 0f)
         {
-            rb.linearVelocity += Vector2.up * Physics2D.gravity.y * (fallMultiplier - 1) * Time.deltaTime;
+            ExecuteJump();
         }
-        else if (rb.linearVelocity.y > 0 && !jumpAction.IsPressed()) // Subindo, mas soltou o botão
+        else if (canDoubleJump)
         {
-            rb.linearVelocity += Vector2.up * Physics2D.gravity.y * (lowJumpMultiplier - 1) * Time.deltaTime;
+            canDoubleJump = false;
+            ExecuteJump();
         }
     }
 
     private void ExecuteJump()
     {
-        // Zera a velocidade vertical antes de aplicar a força para garantir consistência no pulo duplo
-        rb.linearVelocity = new Vector2(rb.linearVelocity.x, 0f);
-        rb.linearVelocity += Vector2.up * jumpForce;
-        coyoteTimeCounter = 0f; // Zera para não pular de novo no ar
+        rb.linearVelocity = new Vector2(rb.linearVelocity.x, jumpForce);
+        jumpBufferCounter = 0f;
+        coyoteTimeCounter = 0f;
+        groundLockTimer = GroundLockAfterJump;
+        isGrounded = false;
+    }
+
+    private void ApplyGravityModifiers()
+    {
+        float velocityY = rb.linearVelocity.y;
+        float gravity = Physics2D.gravity.y * rb.gravityScale * Time.fixedDeltaTime;
+
+        if (velocityY < 0f)
+            rb.linearVelocity += Vector2.up * gravity * (fallMultiplier - 1f);
+        else if (velocityY > 0f && !jumpAction.IsPressed())
+            rb.linearVelocity += Vector2.up * gravity * (lowJumpMultiplier - 1f);
     }
 
     private void Flip()
     {
-        if (moveInput.x != 0)
-        {
-            float direction = Mathf.Sign(moveInput.x);
-            Vector3 currentScale = transform.localScale;
-            currentScale.x = direction * Mathf.Abs(currentScale.x);
-            transform.localScale = currentScale;
-            dashDirection = direction; // Atualiza a direção do dash
-        }
+        if (moveInput.x == 0f) return;
+
+        dashDirection = Mathf.Sign(moveInput.x);
+        Vector3 scale = transform.localScale;
+        scale.x = dashDirection * Mathf.Abs(scale.x);
+        transform.localScale = scale;
     }
 
     private void UpdateAnimations()
     {
         if (animator == null) return;
+
         animator.SetBool(walkingParameter, Mathf.Abs(moveInput.x) > 0.01f);
         animator.SetBool(onGroundParameter, isGrounded);
     }
@@ -199,9 +214,6 @@ public class PlatformController : MonoBehaviour
         float originalGravity = rb.gravityScale;
         rb.gravityScale = 0f;
 
-        // Se estiver parado, dá dash para onde está a olhar
-        if (moveInput.x == 0) dashDirection = Mathf.Sign(transform.localScale.x);
-
         yield return new WaitForSeconds(dashDuration);
 
         rb.gravityScale = originalGravity;
@@ -211,25 +223,22 @@ public class PlatformController : MonoBehaviour
         canDash = true;
     }
 
-    // Desenha a nova caixa de colisão no Editor para você ajustar perfeitamente
     private void OnDrawGizmosSelected()
     {
-        if (groundCheckPoint != null)
-        {
-            Gizmos.color = isGrounded ? Color.green : Color.red;
-            Gizmos.DrawWireCube(groundCheckPoint.position, groundCheckSize);
-        }
+        if (groundCheckPoint == null) return;
+
+        Gizmos.color = isGrounded ? Color.green : Color.red;
+        Gizmos.DrawWireCube(groundCheckPoint.position, groundCheckSize);
     }
 
     public void ChangeTextCoin()
     {
-        coinCounter += 1;
+        coinCounter++;
         if (coinText != null) coinText.text = coinCounter.ToString();
     }
 
     public void Die()
     {
-        Destroy(gameObject);
-        SceneManager.LoadSceneAsync(SceneManager.GetActiveScene().name);
+        SceneManager.LoadScene(SceneManager.GetActiveScene().name);
     }
 }
